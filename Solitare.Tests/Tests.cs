@@ -119,5 +119,29 @@ static class TestRunner
             engine.State.Waste.Push(new Card(Suit.Hearts, Rank.Four, faceUp: true));
             Verify.False(engine.TryWasteToTableau(0), "Red 4 on Red 5 rejected (same colour)");
         });
+
+        //TEST 9
+        Add("Only king can be placed on an empty tableau column", () =>
+        {
+            var engine = new GameEngine();
+            engine.NewGame();
+            engine.State.Tableau[0] = new List<Card>();
+            engine.State.Waste.Push(new Card(Suit.Clubs, Rank.Queen, faceUP: true));
+            Verify.False(engine.TryWasteToTableau(0), "Queen rejected on empty col");
+            engine.State.Waste.Push(new Card(Suit.Clubs, Rank.King, faceUp: true));
+            Verify.True(engine.TryWasteToTableau(0), "King accepted on empty col");
+        });
+
+        //TEST 10
+        Add("Win condition triggers when all four foundations have 13 cards" () => 
+        {
+            var state = new GameState();
+            foreach (var suit in Enum.GetValues<Suit>())
+                foreach (var rank in Enum.GetValues<Rank>())
+                    state.Foundations[suit].Push(new Card(suit, rank, faceUp: true));
+            bool isWon = state.Foundations.Values.All(f => f.Count == 13);
+            Verify.True(isWon, "All foundations full -> win");
+
+        });
     }
 }

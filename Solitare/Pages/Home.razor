@@ -1,7 +1,364 @@
 ﻿@page "/"
+@using Solitare.Models
+@using Solitare.Services
+@inject GameEngine Engine
+@inject SaveGameService Saver
+@implements IDisposable
+@rendermode InteractiveServer
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Solitaire</PageTitle>
 
-<h1>Hello, world!</h1>
+<style>
+    :root {
+        --felt:      #1a5c38;
+        --felt-dark: #133f28;
+        --felt-hi:   #22774a;
+        --card-face: #fdf6e3;
+        --card-back: #1e3a6e;
+        --card-back2:#2a4f94;
+        --red:       #c0392b;
+        --black:     #1a1a1a;
+        --gold:      #f0c040;
+        --shadow:    0 4px 12px rgba(0,0,0,.4);
+        --radius:    8px;
+        --w:         80px;
+        --h:         112px;
+        --font-main: 'Georgia', serif;
+    }
+    html, body { margin:0; padding:0; background:var(--felt-dark); font-family:var(--font-main); }
+    .game-wrap { min-height:100vh; background: radial-gradient(ellipse at 50% 0%, var(--felt-hi) 0%, var(--felt) 40%, var(--felt-dark) 100%); padding:0 0 40px; }
+    .hdr { display:flex; align-items:center; justify-content:space-between; padding:12px 24px; background:rgba(0,0,0,.3); border-bottom:2px solid rgba(255,255,255,.08); flex-wrap:wrap; gap:8px; }
+    .hdr-title { color:var(--gold); font-size:1.6rem; letter-spacing:.12em; text-transform:uppercase; margin:0; }
+    .hdr-stats { display:flex; gap:20px; color:#d4edda; font-size:.9rem; }
+    .hdr-stat  { display:flex; flex-direction:column; align-items:center; }
+    .hdr-stat span:first-child { font-size:.65rem; text-transform:uppercase; letter-spacing:.08em; opacity:.6; }
+    .hdr-stat span:last-child  { font-size:1.1rem; font-weight:bold; }
+    .hdr-btns  { display:flex; gap:8px; flex-wrap:wrap; }
+    .btn { padding:6px 14px; border-radius:5px; border:1px solid rgba(255,255,255,.25); cursor:pointer; font-size:.8rem; font-family:var(--font-main); transition:all .15s; }
+    .btn-primary   { background:var(--gold); color:#1a1a1a; border-color:var(--gold); }
+    .btn-primary:hover { background:#f7d060; }
+    .btn-secondary { background:rgba(255,255,255,.12); color:#fff; }
+    .btn-secondary:hover { background:rgba(255,255,255,.22); }
+    .btn-danger    { background:#c0392b; color:#fff; border-color:#c0392b; }
+    .btn-danger:hover { background:#e74c3c; }
+    .btn:disabled  { opacity:.4; cursor:not-allowed; }
+    .table-area { padding:16px 12px 0; max-width:740px; margin:0 auto; }
+    .top-row { display:flex; gap:12px; margin-bottom:16px; align-items:flex-start; flex-wrap:wrap; }
+    .top-left  { display:flex; gap:12px; }
+    .top-right { display:flex; gap:12px; margin-left:auto; }
+    .card-slot { width:var(--w); height:var(--h); border-radius:var(--radius); border:2px dashed rgba(255,255,255,.18); display:flex; align-items:center; justify-content:center; cursor:pointer; transition:border-color .15s; }
+    .card-slot:hover { border-color:rgba(255,255,255,.45); }
+    .slot-label { color:rgba(255,255,255,.25); font-size:1.8rem; }
+    .card { width:var(--w); height:var(--h); border-radius:var(--radius); border:1px solid rgba(0,0,0,.25); box-shadow:var(--shadow); position:relative; cursor:pointer; transition:transform .1s, box-shadow .1s; user-select:none; flex-shrink:0; }
+    .card:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.5); }
+    .card.selected { transform:translateY(-8px); box-shadow:0 12px 28px rgba(240,192,64,.7); outline:2px solid var(--gold); }
+    .card.back { background: repeating-linear-gradient(45deg, var(--card-back) 0, var(--card-back) 4px, var(--card-back2) 4px, var(--card-back2) 8px); cursor:default; }
+    .card.face { background:var(--card-face); }
+    .card.face.red .cr, .card.face.red .cs { color:var(--red); }
+    .card.face.black .cr, .card.face.black .cs { color:var(--black); }
+    .cr  { position:absolute; top:4px; left:7px; font-size:.85rem; font-weight:bold; line-height:1.1; }
+    .crb { position:absolute; bottom:4px; right:7px; font-size:.85rem; font-weight:bold; line-height:1.1; transform:rotate(180deg); }
+    .cs  { position:absolute; top:50%; left:50%; transform:translate(-50%,-52%); font-size:2rem; }
+    .tableau { display:flex; gap:12px; }
+    .tableau-col { width:var(--w); position:relative; }
+    .t-stack { position:relative; width:var(--w); }
+    .t-stack .card { position:absolute; left:0; }
+    .found-lbl { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); pointer-events:none; color:rgba(255,255,255,.22); font-size:1.9rem; }
+    .notif { margin:8px auto 0; max-width:740px; padding:8px 14px; border-radius:6px; font-size:.85rem; }
+    .notif.err { background:rgba(192,57,43,.3); color:#f5b7b1; border:1px solid rgba(192,57,43,.5); }
+    .notif.ok  { background:rgba(39,174,96,.25); color:#a9dfbf; border:1px solid rgba(39,174,96,.4); }
+    .win-overlay { position:fixed; inset:0; background:rgba(0,0,0,.75); display:flex; align-items:center; justify-content:center; z-index:999; }
+    .win-box { background:var(--felt); border:3px solid var(--gold); border-radius:16px; padding:40px 60px; text-align:center; color:#fff; box-shadow:0 20px 60px rgba(0,0,0,.6); }
+    .win-box h2 { color:var(--gold); font-size:2.4rem; margin-bottom:8px; }
+    .win-box p  { opacity:.85; margin-bottom:20px; }
+    .panel { max-width:740px; margin:16px auto 0; background:rgba(0,0,0,.3); border-radius:10px; padding:16px 20px; color:#d4edda; }
+    .panel h3 { margin:0 0 12px; color:var(--gold); font-size:1rem; letter-spacing:.06em; }
+    .save-list { display:flex; flex-direction:column; gap:6px; max-height:180px; overflow-y:auto; }
+    .save-item { display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,.07); border-radius:6px; padding:6px 10px; font-size:.8rem; gap:8px; }
+    .save-item span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .save-row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center; }
+    .save-row input { flex:1; min-width:140px; padding:5px 10px; border-radius:5px; border:1px solid rgba(255,255,255,.2); background:rgba(255,255,255,.1); color:#fff; font-family:var(--font-main); }
+</style>
 
-Welcome to your new app.
+<div class="game-wrap">
+    <div class="hdr">
+        <h1 class="hdr-title">Solitare</h1>
+        <div class="hdr-stats">
+            <div class="hdr-stat"><span>Score</span><span>@Engine.State.Score</span></div>
+            <div class="hdr-stat"><span>Moves</span><span>@Engine.State.Moves</span></div>
+            <div class="hdr-stat"><span>Time</span><span>@FormatTime(Engine.State.ElaspedSeconds</span></div>
+        </div>
+        <div class="hdr-btns">
+            <button class="btn btn-primary" @onclick="NewGame">New Game</button>
+            <button class="btn btn-secondary" @onclick="Undo" disabled="@(!Engine.State.UndoHistory.Count == 0)">Undo</button>
+            <button class="btn btn-secondary" @onclick="AutoComplete" disabled="@(!Engine.CanAutoComplete())">Auto</button>
+            <button class="btn btn-secondary" @onclick="ToggleSavePanel">Save/Load</button>
+        </div>
+    </div>
+
+    @if (_msg != null)
+    {
+        <div class="notif @(_isErr ? "err" : "ok")">@_msg</div>
+    }
+
+    <div class="table-area">
+        <div class="top-row">
+            <div class="top-left">
+                <!--Stock-->
+                <div @onclick="DrawStock">
+                    @if (Engine.State.Stock.Count > 0)
+                    { <div class="card back" title="Draw"></div> }
+                    else
+                    { <div class="card-slot"><span class="slot-label">Slot</span></div>}
+                </div>
+                <!--Waste-->
+                <div>
+                    @if (Engine.State.Waste.Count > 0)
+                    {
+                        var wc = Engine.State.Waste.Peek();
+                        <div class="card face @(wc.IsRed?"red":"black") @(SelIs("waste",0,0)?"selected":"")" @onclick="SelectWaste" title="@wc">
+                            <span class="cr">@wc.RankLabel<br/>@wc.SuitSymbol</span>
+                            <span class="cs">@wc.SuitSymbol</span>
+                            <span class="crb">@wc.RankLabel<br/>@wc.SuitSymbol</span>
+                        </div>
+                    }
+                    else
+                    {<div class="card-slot"><span class="slot-label">?</span></div>}
+                </div>
+            </div>
+
+            <!--Foundations-->
+            <div class="top-right">
+                @foreach (var suit in Enum.GetValues<Suit>())
+                {
+                    var s = suit;
+                    var f = Engine.State.Foundations[s];
+                    <div @onclick="()=>ClickFoundation(s)" style="position:relative">
+                        @if (f.Count > 0)
+                        {
+                            var fc = f.Peek();
+                            <div class="card face @(fc.IsRed?"red":"black")" title="Foundation @s">
+                                 <span class="cr">@wc.RankLabel<br/>@wc.SuitSymbol</span>
+                                 <span class="cs">@wc.SuitSymbol</span>
+                                 <span class="crb">@wc.RankLabel<br/>@wc.SuitSymbol</span>
+                            </div>
+                        }
+                        else 
+                        {
+                            <div class="card-slot">
+                                <span class="found-lbl">@SuitSym(s)</span>
+                            </div>
+
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        <!--Tabeau-->
+        <div class="tableau">
+            @for (int ci = 0; ci < 7; ci++)
+            {
+                var col = ci;
+                var column = Engine.State.Tableau[col];
+                <div class="tabeau-col" style="min-height:@(TabHeight(column))px" @onclick="()=>ClickTabEmpty(col)">
+                    @if (column.Count == 0)
+                    { <div class="card-slot"><span class="slot-label">K</span></div> }
+                    else
+                    {
+                        <div class="t-stack" style="height:@(TabHeight(column))px">
+                            @for (int ri = 0; ri < column.Count; ri++)
+                            {
+                                var row = ri;
+                                var card = column[row];
+                                int off = 0;
+                                for (int k = 0; k < row; k++) off += column[k].FaceUp ? 28 : 18;
+
+                                @if (!card.FaceUp)
+                                {
+                                    <div class="card back" style="top:@(off)px;z-index:@row"></div>
+                                }
+                                else
+                                {
+                                    <div class="card face @(card.IsRed?"red":"black") @(SelIs("tab",col,row)?"selected":")"
+                                         style="top:@(off)px;z-index:@row" @onclick:stopPropagation="true" 
+                                         @onclick="()=>ClickTabCard(col,row)" title="@card">
+                                        <span class="cr">@card.RankLabel<br/>@card.SuitSymbol</span>
+                                        @if (row == column.Count-1) { <span class="cs">@card.SuitSymbol</span> }
+                                        <span class="crb">@card.RankLabel<br/>@card.SuitSymbol</span>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (_showSave)
+    {
+        <div class="panel">
+            <h3> Save / Load</h3>
+            <div class="save-row">
+                <input @bind="_slotName" placeholder="Save name (optional)" maxlength="40" />
+                <button class="btn btn-primary" @onclick="SaveGame">Save Current</button>
+            </div>
+
+            @if (_saves.Counts > 0)
+            {
+                <div class="save-list" style="margin-top:12px">
+                    @foreach (var path in _saves)
+                    {
+                        var p = path;
+                        <div class="save-item">
+                            <button class="btn btn-secondary" style="padding:3px 10px" @onclick="()=>LoadGame(p)">Load</button>
+                            <button class="btn btn-danger" style="padding:3px 10px" @onclick="()=>DeleteSave(p)">Delete Save</button>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            { <p style="opacity:.5;font-size:.8rem;margin-top:10px">No saves in @Saver.SaveDirectory</p> }
+        </div>
+    }
+
+    @if (Engine.State.IsWon)
+    {
+        <div class="win-overlay">
+            <div class="win-box">
+                <h2>You Won!!!</h2>
+                <p>Score: <strong>@Engine.State.Score</strong>
+                    Moves: <strong>@Engine.State.Moves</strong>
+                    Time: <strong>@FormatTime(Engine.State.ElapsedSeconds)</strong></p>
+                <button class="btn btn-primary" @onclick="NewGame">Play Again</button>
+            </div>
+        </div>
+    }
+
+</div>
+
+@code {
+    private string? _selSrc; private int _selCol=-1,_selRow=-1; private Suit _selSuit;
+    private bool _showSave; private string? _slotName,_msg; private bool _isErr;
+    private List<string> _saves = new();
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        Engine.NewGame();
+        _timer = new System.Threading.Timer(_=> InvokeAsync(StateHasChanged), null,
+            TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+    public void Dispose() => _timer?.Dispose();
+
+    bool SelIs(string src,int col,int row) => _selSrc==src&&_selCol==col&&_selRow==row;
+    void ClearSel() { _selSrc=null; _selCol=-1; _selRow=-1; }
+    void Msg(string m,bool err=false){_msg=m;_isErr=err;}
+    void ClearMsg(){_msg=null;}
+    static string FormatTime(int s) => $"{s/60:D2}:{s%60:D2}";
+    static string SuitSym(Suit s) => s switch { Suit.Hearts=>"Hearts",Suit.Diamonds=>"Diamonds",Suit.Clubs=>"Clubs",_=>"Spades" };
+
+    static int TabHeight(List<Card> col)
+    {
+        if (col.Count==0) return 112;
+        int off=0;
+        for(int i=0;i<col.Count-1;i++) off+=col[i].FaceUp?28:18;
+        return off+112;
+    }
+
+    void NewGame(){Engine.NewGame();ClearSel();ClearMsg();}
+    void Undo(){ClearMsg();if(!Engine.Undo())Msg("Nothing to undo.",true);ClearSel();}
+
+    async Task AutoComplete()
+    {
+        ClearSel();
+        while(!Engine.State.IsWon && Engine.CanAutoComplete())
+        {
+            if(!Engine.AutoCompleteStep()) break;
+            StateHasChanged();
+            await Task.Delay(100);
+        }
+    }
+
+    void DrawStock(){ClearSel();ClearMsg();Engine.DrawFromStock();}
+
+    void SelectWaste()
+    {
+        ClearMsg();
+        if(_selSrc=="waste"){ClearSel();return;}
+        ClearSel(); _selSrc="waste"; _selCol=0; _selRow=0;
+    }
+
+    void ClickFoundation(Suit suit)
+    {
+        ClearMsg();
+        if(_selSrc==null)
+        {
+            if(Engine.State.Foundations[suit].Count>0){_selSrc="foundation";_selSuit=suit;}
+            return;
+        }
+        bool ok=_selSrc switch
+        {
+            "waste"   =>Engine.TryWasteToFoundation(),
+            "tab"     =>Engine.TryTableauToFoundation(_selCol),
+            _=>false
+        };
+        if(!ok) Msg("Cannot move there.",true);
+        ClearSel();
+    }
+
+    void ClickTabCard(int col,int row)
+    {
+        ClearMsg();
+        if(_selSrc==null){_selSrc="tab";_selCol=col;_selRow=row;return;}
+        if(_selSrc=="tab"&&_selCol==col&&_selRow==row){ClearSel();return;}
+        bool ok=MoveSel(col);
+        if(!ok){_selSrc="tab";_selCol=col;_selRow=row;}
+        else ClearSel();
+    }
+
+    void ClickTabEmpty(int col)
+    {
+        ClearMsg();
+        if(_selSrc==null) return;
+        bool ok=MoveSel(col);
+        if(!ok) Msg("Cannot place there.",true);
+        ClearSel();
+    }
+
+    bool MoveSel(int toCol) => _selSrc switch
+    {
+        "waste"      =>Engine.TryWasteToTableau(toCol),
+        "tab"        =>Engine.TryTableauToTableau(_selCol,_selRow,toCol),
+        "foundation" =>Engine.TryFoundationToTableau(_selSuit,toCol),
+        _=>false
+    };
+
+    void ToggleSavePanel(){_showSave=!_showSave;if(_showSave)RefreshSaves();}
+    void RefreshSaves()=>_saves=Saver.ListSaves().ToList();
+
+    void SaveGame()
+    {
+        ClearMsg();
+        var p=Saver.Save(Engine.State,_slotName);
+        if(p!=null){Msg(Saver.LastSuccess!);_slotName=null;RefreshSaves();}
+        else Msg(Saver.LastError!,true);
+    }
+
+    void LoadGame(string path)
+    {
+        ClearMsg();
+        var s=Saver.Load(path);
+        if(s!=null){Engine.LoadState(s);ClearSel();Msg(Saver.LastSuccess!);_showSave=false;}
+        else Msg(Saver.LastError!,true);
+    }
+
+    void DeleteSave(string path)
+    {
+        ClearMsg();
+        if(Saver.Delete(path)){Msg(Saver.LastSuccess!);RefreshSaves();}
+        else Msg(Saver.LastError!,true);
+    }
+}
+
